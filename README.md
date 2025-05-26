@@ -1,41 +1,39 @@
 # OptimizedSparseGEMM
 
-This repository contains several implementations of sparse matrix–matrix multiplication (SGEMM) in Block Compressed Sparse Row (BCSR) format, progressively optimized for AVX2 on x64.
+This repo now contains *four* progressively optimized BCSR SGEMM kernels:
 
-## Files and Versions
+1. **Masked Core (previous)**  
+   - On-the-fly AVX2 masked loads/stores for non-multiple-of-8 tails.
 
-1. **`bcsr_sgemm_basic`**  
-   - A straightforward, scalar fallback implementation  
-   - Used for correctness verification and baseline performance
-
-2. **`bcsr_sgemm_optimized`**  
-   - Adds AVX2 vectorization (8-wide FMA), loop-unrolling over both rows and columns  
-   - Multi-threaded with OpenMP
-
-3. **`bcsr_sgemm_masked.h`**  
-   - **Latest Version 1**:  
-     - Fully vectorized AVX2 core  
-     - Handles non-multiple-of-8 “tail” columns via _masked_ loads and stores (`_mm256_maskload_ps` / `_mm256_maskstore_ps`), eliminating any scalar remainder loops  
-
-4. **`bcsr_sgemm_padded.h`**  
-   - **Latest Version 2**:  
-     - Pads every block’s column dimension up to the next multiple of 8  
-     - Uses stack-allocated buffers (`Wpad`, `Ypad`) filled with zeros for the padding region  
-     - Executes only fixed-width (8-column) AVX2 loops, then copies back the original (unpadded) results
+2. **Padded Core (previous)**  
+   - Zero-padded blocks to the next multiple of 8, pure 8-wide AVX2.
 
 ---
 
-## Change Log
+## New Advanced Versions
 
-- **Mask-Vector Tail Handling**  
-  - Introduced a per-block mask based on `c % 8`  
-  - Replaced all scalar tail loops with masked AVX2 operations  
-  - Removed all branching in the inner multiply-add
+### 3. `bcsr_sgemm_masked_advanced.h`
+- **Register‐blocked** over 4 rows at a time.
+- **Aligned loads/stores** (`_mm256_load_ps` / `_store_ps`).
+- **Software prefetch** inserted for weight and output.
+- **Single mask computed once** and reused.
+- Minimizes branching in inner loops.
 
-- **Zero-Padding Approach**  
-  - Compute `c_padded = 8 * ceil(c/8)` at runtime  
-  - Copy original weight/output data into padded buffers, zero-fill the remainder  
-  - Perform pure 8-wide AVX2 multiply-adds across the padded width  
-  - Strip off padding before writing results back to `Y`
+### 4. `bcsr_sgemm_padded_advanced.h`
+- **Offline block packing**: all weight blocks pre-padded and aligned.
+- **Aligned 32-byte buffers** for prefetch and load/store.
+- **Register‐block** of 4 rows per iteration.
+- Eliminates `memcpy/memset` in hot loop by moving to preload.
+- Simplest inner loop: only `_mm256_fmadd_ps` on aligned data.
 
-These two versions demonstrate alternative strategies to ensure **100% vectorized** AVX2 execution without any scalar cleanup loops. Choose the one that best fits your memory and performance requirements.
+---
+
+## Benchmarks & Tuning
+
+- Both versions target x64 AVX2; tune `r` (4) and `c` (8) for your CPU.
+- Measure with `std::chrono::high_resolution_clock`, capture GFLOPS.
+- Compare memory bandwidth using tools like `perf` or Intel VTune.
+
+Choose the variant that best fits your memory‐compute tradeoffs:
+- **Masked** for minimal extra storage & dynamic tails.
+- **Padded** for best pure‐vector throughput at slight memory overhead.
